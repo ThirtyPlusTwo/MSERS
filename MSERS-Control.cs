@@ -1,4 +1,4 @@
-string _ScriptVersion = "0.0.1";
+string _ScriptVersion = "0.0.2";
 
 int _BroadcastCooldownTime = 1000; // Time in ms (int is more efficient than float, double, long)
 int _TimingLCDsRefreshCooldownTime = 15000; // Time in ms
@@ -389,10 +389,13 @@ void UpdateWeatherState() {
 	_wetterChance = 0;
 	int leadLap =  _RacePositionsList.FirstOrDefault()?.Laps?.Count ?? 0;
 	
-	for (int i = 0; i < _CurrentTrackMode.WeatherChanceValues.Length - 1; i += 3) {
-		if (leadLap > _CurrentTrackMode.WeatherChanceValues[i]) { continue; }
-		_drierChance = _CurrentTrackMode.WeatherChanceValues[i + 1];
-		_wetterChance = _CurrentTrackMode.WeatherChanceValues[i + 2];
+	for (int i = _CurrentTrackMode.WeatherChanceValues.Length - 1; i >= 0; i -= 3) {
+		int newIndex = i - 2;
+		if (leadLap < _CurrentTrackMode.WeatherChanceValues[newIndex]) { continue; }
+
+		_drierChance = _CurrentTrackMode.WeatherChanceValues[newIndex + 1];
+		_wetterChance = _CurrentTrackMode.WeatherChanceValues[newIndex + 2];
+		break;
 	}
 	
 	if (_weatherStateRoll > _drierChance + _wetterChance) {
