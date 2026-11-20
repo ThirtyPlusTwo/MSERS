@@ -1,4 +1,4 @@
-string _ScriptVersion = "0.0.2";
+string _ScriptVersion = "0.0.4";
 
 int _BroadcastCooldownTime = 1000; // Time in ms (int is more efficient than float, double, long)
 int _TimingLCDsRefreshCooldownTime = 15000; // Time in ms
@@ -580,20 +580,30 @@ void UpdateCommunication() {
 
 		StringBuilder prevSectorData = new StringBuilder("\"");
 		double prevSectorTime = 0;
+
+		StringBuilder pbSectorData = new StringBuilder("\"");
+		double pbSectorTime = 0;
+
 		for (int i = 1; i <= _Checkpoints.Keys.Count; i++) {
 			currentSectorTime = currentRacer.CurrentLap?.GetSector(i).TotalSeconds ?? 0;
 			currentSectorData.Append($"{currentSectorTime:00.000},");
 
 			prevSectorTime = currentRacer.PreviousLap?.GetSector(i).TotalSeconds ?? 0;
 			prevSectorData.Append($"{prevSectorTime:00.000},");
+
+			pbSectorTime = currentRacer.BestLap?.GetSector(i).TotalSeconds ?? 0;
+			pbSectorData.Append($"{pbSectorTime:00.000},");
 		}
 		prevSectorData.Append("\"");
 		currentSectorData.Append("\"");
+		pbSectorData.Append("\"");
 
 		prevSectorData.Remove(prevSectorData.Length - 2, 1);
 		currentSectorData.Remove(currentSectorData.Length - 2, 1);
+		pbSectorData.Remove(pbSectorData.Length - 2, 1);
 
 		StringBuilder raceData = new StringBuilder("");
+
 		raceData.AppendLine("[RACE-DATA]");
 		raceData.AppendLine($"Lap={lapCount}");
 		raceData.AppendLine($"MaxLaps={_CurrentTrackMode.MaxLaps}");
@@ -602,9 +612,13 @@ void UpdateCommunication() {
 		raceData.AppendLine($"CurrentSectorTimes={currentSectorData.ToString()}");
 		raceData.AppendLine($"PreviousLapSectorTimes={prevSectorData.ToString()}");
 		raceData.AppendLine($"PBLapTime={pbLap:00.000}");
+		raceData.AppendLine($"PBLapSectorTimes={pbSectorData}");
 		raceData.AppendLine($"PreviousLapTime={prevLap:00.000}");
 		raceData.AppendLine($"OverallFastestLap={fastestLap:00.000}");
 		raceData.AppendLine($"OverallFastestLapSectorTimes={fastestLapSectorData.ToString()}");
+		raceData.AppendLine($"WeatherState=\"{_CurrentTrackMode.CurrentWeather}\"");
+		raceData.AppendLine($"WeatherChances=\"{_drierChance},{_wetterChance}\"");
+		raceData.AppendLine($"WeatherCooldownTime={(_weatherCycleCooldown/1000.0):00.000}");
 
 		IGC.SendUnicastMessage(currentRacer.IgcAddress, "RACE-DATA", raceData.ToString());
 	}
