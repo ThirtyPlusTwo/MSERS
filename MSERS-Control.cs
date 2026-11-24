@@ -1,4 +1,4 @@
-string _ScriptVersion = "0.0.4";
+string _ScriptVersion = "0.0.5";
 
 int _BroadcastCooldownTime = 1000; // Time in ms (int is more efficient than float, double, long)
 int _TimingLCDsRefreshCooldownTime = 15000; // Time in ms
@@ -45,6 +45,7 @@ double _StartLightsOutMax = 0;
 float _RandLightsTime = -1.0f;
 
 TrackMode _CurrentTrackMode;
+IniTransfer _PitZoneIni;
 Dictionary<string, TrackMode> _TrackModes = new Dictionary<string, TrackMode>();
 Dictionary<string, IniTransfer> _CarClasses = new Dictionary<string, IniTransfer>();
 Dictionary<string, IniTransfer> _TireClasses = new Dictionary<string, IniTransfer>();
@@ -68,6 +69,7 @@ int _wetterChance = 0;
 // Item5 = Weather Fade In Time(int)
 // Item6 = Weather Intensity(float)
 private Dictionary<WeatherLevel, MyTuple<string, float, Vector3D, Vector3, int, float>> _InGameWeatherValues = new Dictionary<WeatherLevel, MyTuple<string, float, Vector3D, Vector3, int, float>>();
+private Dictionary<WeatherLevel, int> _WeatherStateWetness = new Dictionary<WeatherLevel, int>();
 
 public Program() {
 	Me.GetSurface(0).ContentType = ContentType.TEXT_AND_IMAGE;
@@ -93,6 +95,7 @@ public Program() {
 		SetupTrackModes();
 		SetupTireClasses();
 		SetupCarClasses();
+		SetupPitZoneIni();
 	} catch (Exception e) {
 		_SetupErrors.Increment($"{e.Message}");
 	}
@@ -225,11 +228,13 @@ void UpdateLapsLists() {
 	_RacePositionsList = _LapsLogList
 		.OrderByDescending(r => r.Laps.Count)
 		.ThenBy(r => r.TotalCompletedRaceTime)
+		.ThenBy(r => r.ClassTag)
 		.ToList();
 	
 	_FastestLapsPositionsList = _LapsLogList
 		.Where(r => r.BestLap != null)
 		.OrderBy(r => r.BestLap.LapTime)
+		.ThenBy(r => r.ClassTag)
 		.ToList();
 }
 
@@ -387,7 +392,7 @@ void UpdateWeatherState() {
 	
 	_drierChance = 0;
 	_wetterChance = 0;
-	int leadLap =  _RacePositionsList.FirstOrDefault()?.Laps?.Count ?? 0;
+	int leadLap =  _RacePositionsList.FirstOrDefault()?.Laps?.Count ?? 1;
 	
 	for (int i = _CurrentTrackMode.WeatherChanceValues.Length - 1; i >= 0; i -= 3) {
 		int newIndex = i - 2;
@@ -522,7 +527,7 @@ void UpdatePitEntrySensor() {
 
 		if (entity.EntityId != currentRacer.Id) { continue; }
 
-		IGC.SendUnicastMessage(currentRacer.IgcAddress, "PIT-COMMAND", "LMT-ON");
+		IGC.SendUnicastMessage(currentRacer.IgcAddress, "ARGUMENT", "LMT_ON");
 	}
 }
 
@@ -547,7 +552,7 @@ void UpdatePitExitSensor() {
 			}
 		}
 
-		IGC.SendUnicastMessage(currentRacer.IgcAddress, "PIT-COMMAND", "LMT_OFF");
+		IGC.SendUnicastMessage(currentRacer.IgcAddress, "ARGUMENT", "LMT_OFF");
 
 		if (_CurrentTrackMode.ModeFinished) { continue; }
 		currentRacer.NewLap(DateTime.Now.Ticks, true);
@@ -618,6 +623,7 @@ void UpdateCommunication() {
 		raceData.AppendLine($"OverallFastestLapSectorTimes={fastestLapSectorData.ToString()}");
 		raceData.AppendLine($"WeatherState=\"{_CurrentTrackMode.CurrentWeather}\"");
 		raceData.AppendLine($"WeatherChances=\"{_drierChance},{_wetterChance}\"");
+		raceData.AppendLine($"WeatherStateWetness={_WeatherStateWetness[_CurrentTrackMode.CurrentWeather]}");
 		raceData.AppendLine($"WeatherCooldownTime={(_weatherCycleCooldown/1000.0):00.000}");
 
 		IGC.SendUnicastMessage(currentRacer.IgcAddress, "RACE-DATA", raceData.ToString());
@@ -645,6 +651,9 @@ void DoSignalListen() {
 		switch (message.Tag.ToUpper()) {
 			case "REGISTER":
 				HandleRegisterSignal(data);
+				break;
+			case "REGISTER-DATA":
+				HandleRegisterDataSignal(data);
 				break;
 			case "ARGUMENT":
 				HandleArgument(data);
@@ -683,10 +692,42 @@ void HandleRegisterSignal(string message) {
 	}
 
 	TrackedRacer currentRacer = _TrackedRacers[cubeGridName];
+
+	StringBuilder registerData = new StringBuilder(_CarClasses[currentRacer.ClassTag].IniDef);
+	registerData.AppendLine(_PitZoneIni.IniDef);
+
 	IGC.SendUnicastMessage(
 		currentRacer.IgcAddress,
 		"REGISTER-DATA",
-		_CarClasses[currentRacer.ClassTag].IniDef + $"\nPitSpeed={_SetupIni.Get("PIT-ZONE", "PitSpeed").ToString()}"
+		registerData.ToString()
+	);
+}
+
+void HandleRegisterDataSignal(string message) {
+	MyIniParseResult result;
+	if (!_IGCIni.TryParse(message, out result)) { return; }
+
+	string curSec = "REGISTER";
+
+	string cubeGridName = _IGCIni.Get(curSec, "CubeGridName").ToString().Replace("\"","");
+	string cleanName = _IGCIni.Get(curSec, "CleanName").ToString().Replace("\"","");
+	string classTag = _IGCIni.Get(curSec, "ClassTag").ToString().Replace("\"","");
+	int driverNumber = _IGCIni.Get(curSec, "DriverNumber").ToInt32();
+	long id = _IGCIni.Get(curSec, "Id").ToInt64();
+	long igcAddress = _IGCIni.Get(curSec, "IgcAddress").ToInt64();
+
+	if (!_TrackedRacers.ContainsKey(cubeGridName)) { return; }
+	if (_TrackedRacers[cubeGridName].Id != id) { return; } // must be the same car
+
+	TrackedRacer currentRacer = _TrackedRacers[cubeGridName];
+
+	StringBuilder registerData = new StringBuilder(_CarClasses[currentRacer.ClassTag].IniDef);
+	registerData.AppendLine(_PitZoneIni.IniDef);
+
+	IGC.SendUnicastMessage(
+		currentRacer.IgcAddress,
+		"REGISTER-DATA",
+		registerData.ToString()
 	);
 }
 
@@ -696,7 +737,7 @@ void SetupCarClasses() {
 	foreach (string curSec in carClassSectionNames) {
 		string className = _SetupIni.Get(curSec, "ClassNameTag").ToString().Replace("\"","");
 
-		string iniDef = $"[{curSec}]\n";
+		string iniDef = $"[CAR-CLASS]\n";
 		List<MyIniKey> curSecKeys = new List<MyIniKey>();
 		_SetupIni.GetKeys(curSec, curSecKeys);
 
@@ -704,7 +745,7 @@ void SetupCarClasses() {
 			iniDef += $"{curKey.Name}={_SetupIni.Get(curKey).ToString()}\n";
 		}
 
-		string[] validTires = _SetupIni.Get(curSec, "ValidTires").ToString().Replace("\"","").Split(',');
+		string[] validTires = _SetupIni.Get(curSec, "ValidTires").ToString().Replace("\"","").Replace("{","").Replace("}","").Split(',');
 
 		foreach (string tire in validTires) {
 			if (!_TireClasses.ContainsKey(tire.ToUpper())) { continue; }
@@ -731,6 +772,20 @@ void SetupTireClasses() {
 
 		_TireClasses.Add(tireName.ToUpper(), new IniTransfer(tireName, iniDef));
 	}
+}
+
+void SetupPitZoneIni() {
+	string curSec = "PIT-ZONE";
+
+	List<MyIniKey> curSecKeys = new List<MyIniKey>();
+	_SetupIni.GetKeys(curSec, curSecKeys);
+
+	string iniDef = $"[{curSec}]\n";
+	foreach(MyIniKey curKey in curSecKeys) {
+		iniDef += $"{curKey.Name}={_SetupIni.Get(curKey).ToString()}\n";
+	}
+
+	_PitZoneIni = new IniTransfer(curSec, iniDef);
 }
 
 void HandleArgument(string argument) {
@@ -827,7 +882,7 @@ void SetupTrackModes() {
 void SetupWeatherSettings() {
 	string curSec = "WEATHER";
 	// x1000 to get to ms
-	int weatherCycleTime = _SetupIni.Get(curSec, "WeatherCycleTime").ToInt32() * 1000;
+	int weatherCycleTime = (int)(_SetupIni.Get(curSec, "WeatherCycleTime").ToSingle() * 1000);
 	// This is to cap the number of states based on the number of weather states in the weather enum
 	int maxWeatherChangeStates = (int)MathHelper.Clamp(_SetupIni.Get(curSec, "MaxWeatherChangeStates").ToInt32(), 1, Enum.GetNames(typeof(WeatherLevel)).Length - 1);
 	
@@ -844,6 +899,12 @@ void SetupWeatherSettings() {
 		[WeatherLevel.Rain] = new MyTuple<string, float, Vector3D, Vector3, int, float>("RainHeavy", 5000f, Me.WorldMatrix.Translation, new Vector3(0, 1, 0), 0, 0.9f),
 		[WeatherLevel.HeavyRain] = new MyTuple<string, float, Vector3D, Vector3, int, float>("ThunderstormHeavy", 5000f, Me.WorldMatrix.Translation, new Vector3(0, 1, 0), 0, 0.99f)
 	};
+
+	string weatherStateWetnessString = _SetupIni.Get(curSec, "WeatherStateWetness").ToString();
+	int[] weatherStateWetness = GetIntListFromString(weatherStateWetnessString);
+	for (int i = 0; i < weatherStateWetness.Length; i++) {
+		_WeatherStateWetness.Add((WeatherLevel)(i + 1), weatherStateWetness[i]);
+	}
 }
 
 void SetupCheckpoints() {
