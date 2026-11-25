@@ -110,14 +110,14 @@ void UpdateSteering() {
 	float frictionFactor = (_Suspensions.FL.Friction < _CurrentClass.SteeringFrictionStart) ? (float)MathHelper.Clamp(a*Math.Pow(x, 4) + 1, _CurrentClass.SteeringFrictionAdjustmentFloor, 1f) : 1f;
 	if (_CurrentClass.DoFrontSteering) {
 		float frontAngle = MathHelper.ToRadians(RangedInterpolation2D(carSpeed, _FrontSteeringPoints));
-		frontAngle = (float)MathHelper.Clamp(frontAngle * frictionFactor, 0f, MathHelper.ToRadians(_CurrentClass.MaxSteeringAngle));
+		frontAngle = (float)MathHelper.Clamp(frontAngle * frictionFactor, 0f, (float)MathHelper.ToRadians(_CurrentClass.MaxSteeringAngle));
 
 		_Suspensions.FL.MaxSteerAngle = frontAngle;
 		_Suspensions.FR.MaxSteerAngle = frontAngle;
 	}
 	if (_CurrentClass.DoRearSteering) {
 		float rearAngle = MathHelper.ToRadians(RangedInterpolation2D(carSpeed, _RearSteeringPoints));
-		rearAngle = (float)MathHelper.Clamp(rearAngle * frictionFactor, 0f, MathHelper.ToRadians(_CurrentClass.MaxSteeringAngle));
+		rearAngle = (float)MathHelper.Clamp(rearAngle * frictionFactor, 0f, (float)MathHelper.ToRadians(_CurrentClass.MaxSteeringAngle));
 
 		_Suspensions.RL.MaxSteerAngle = rearAngle;
 		_Suspensions.RR.MaxSteerAngle = rearAngle;
