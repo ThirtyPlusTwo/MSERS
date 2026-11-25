@@ -1,4 +1,4 @@
-string _ScriptVersion = "0.0.3";
+string _ScriptVersion = "0.0.4";
 bool _IsRegistered = false;
 
 float _delta = 0f;
@@ -102,18 +102,22 @@ void UpdateSteering() {
 		_Suspensions.RL.Steering = false;
 		_Suspensions.RR.Steering = false;
 	}
-
+	
 	float carSpeed = (float)_MainController.GetShipSpeed();
+
+	float a = -( (1 - _CurrentClass.SteeringFrictionAdjustmentFactor) / Math.Pow(_CurrentClass.SteeringFrictionStart - 40f, 4) );
+	float x = _Suspensions.FL.Friction - _CurrentClass.SteeringFrictionStart;
+	float frictionFactor = (_Suspensions.FL.Friction < _CurrentClass.SteeringFrictionStart) ? (float)MathHelper.Clamp(a*Math.Pow(x, 4) + 1, _CurrentClass.SteeringFrictionAdjustmentFloor, 1f) : 1f;
 	if (_CurrentClass.DoFrontSteering) {
 		float frontAngle = MathHelper.ToRadians(RangedInterpolation2D(carSpeed, _FrontSteeringPoints));
-		frontAngle = (float)MathHelper.Clamp(frontAngle, 0f, MathHelper.ToRadians(_CurrentClass.MaxSteeringAngle));
+		frontAngle = (float)MathHelper.Clamp(frontAngle * frictionFactor, 0f, MathHelper.ToRadians(_CurrentClass.MaxSteeringAngle));
 
 		_Suspensions.FL.MaxSteerAngle = frontAngle;
 		_Suspensions.FR.MaxSteerAngle = frontAngle;
 	}
 	if (_CurrentClass.DoRearSteering) {
 		float rearAngle = MathHelper.ToRadians(RangedInterpolation2D(carSpeed, _RearSteeringPoints));
-		rearAngle = (float)MathHelper.Clamp(rearAngle, 0f, MathHelper.ToRadians(_CurrentClass.MaxSteeringAngle));
+		rearAngle = (float)MathHelper.Clamp(rearAngle * frictionFactor, 0f, MathHelper.ToRadians(_CurrentClass.MaxSteeringAngle));
 
 		_Suspensions.RL.MaxSteerAngle = rearAngle;
 		_Suspensions.RR.MaxSteerAngle = rearAngle;
@@ -326,14 +330,18 @@ void SetupCarClass() {
 
 	float baseMaxSpeed = _IGCIni.Get(curSec, "BaseMaxSpeed").ToSingle();
 	float basePower = _IGCIni.Get(curSec, "BasePower").ToSingle();
-	bool doFrontSteering = _IGCIni.Get(curSec, "DoFrontSteering").ToBoolean();
-	bool doRearSteering = _IGCIni.Get(curSec, "DoRearSteering").ToBoolean();
-	float maxSteeringAngle = _IGCIni.Get(curSec, "MaxSteeringAngle").ToSingle();
 	float minWheelHeight = _IGCIni.Get(curSec, "MinWheelHeight").ToSingle();
 	int minWheelbase = _IGCIni.Get(curSec, "MinWheelbase").ToInt32();
 	float maxLateralSpeed = _IGCIni.Get(curSec, "MaxLateralSpeed").ToSingle();
 	float minWeight = _IGCIni.Get(curSec, "MinWeight").ToSingle();
 	float maxWeight = _IGCIni.Get(curSec, "MaxWeight").ToSingle();
+
+	bool doFrontSteering = _IGCIni.Get(curSec, "DoFrontSteering").ToBoolean();
+	bool doRearSteering = _IGCIni.Get(curSec, "DoRearSteering").ToBoolean();
+	float maxSteeringAngle = _IGCIni.Get(curSec, "MaxSteeringAngle").ToSingle();
+	float steeringFrictionAdjustmentFactor = _IGCIni.Get(curSec, "SteeringFrictionAdjustmentFactor").ToSingle();
+	float steeringFrictionAdjustmentFloor = _IGCIni.Get(curSec, "SteeringFrictionAdjustmentFactor").ToSingle();
+	float steeringFrictionStart = _IGCIni.Get(curSec, "SteeringFrictionStart").ToSingle();
 
 	float draftingSpeedIncrease = _IGCIni.Get(curSec, "DraftingSpeedIncrease").ToSingle();
 	float draftingPowerIncrease = _IGCIni.Get(curSec, "DraftingPowerIncrease").ToSingle();
@@ -365,7 +373,8 @@ void SetupCarClass() {
 	int minPitTime = (int)(_IGCIni.Get(curSec, "MinPitTime").ToSingle() * 1000);
 	int maxPitTime = (int)(_IGCIni.Get(curSec, "MaxPitTime").ToSingle() * 1000);
 
-	_CurrentClass = new CarClass(classNameTag, baseMaxSpeed, basePower, doFrontSteering, doRearSteering, maxSteeringAngle, minWheelHeight, minWheelbase, maxLateralSpeed, minWeight, maxWeight, isDraftingEnabled, isFuelEnabled, isERSEnabled, isDownforceEnabled);
+	_CurrentClass = new CarClass(classNameTag, baseMaxSpeed, basePower, minWheelHeight, minWheelbase, maxLateralSpeed, minWeight, maxWeight, isDraftingEnabled, isFuelEnabled, isERSEnabled, isDownforceEnabled);
+	_CurrentClass.SetSteeringValues(doFrontSteering, doRearSteering, maxSteeringAngle, steeringFrictionAdjustmentFactor, steeringFrictionAdjustmentFloor, steeringFrictionStart);
 	_CurrentClass.SetDraftingValues(draftingSpeedIncrease, draftingPowerIncrease, residualDraftingTime);
 	_CurrentClass.SetFuelValues(fuelSpeedIncrease, fuelPowerIncrease, fuelLifetime, refuelTime, maxFuelModifier);
 	_CurrentClass.SetERSValues(ersSpeedIncrease, ersPowerIncrease, ersWheelPropulsionOverride, ersLifetime, ersRechargeTime, ersPitRechargeTime, maxERSModifier);
@@ -565,14 +574,18 @@ private class CarClass {
 
 	public float BaseMaxSpeed {get;set;}
 	public float BasePower {get;set;}
+	public int MinWheelbase {get;set;}
+	public float MinWheelHeight {get;set;}
+	public float MinWeight {get;set;}
+	public float MaxWeight {get;set;}
+	public float MaxLateralSpeed {get;set;}
+
 	public bool DoFrontSteering {get;set;}
 	public bool DoRearSteering {get;set;}
 	public float MaxSteeringAngle {get;set;}
-	public float MinWheelHeight {get;set;}
-	public int MinWheelbase {get;set;}
-	public float MaxLateralSpeed {get;set;}
-	public float MinWeight {get;set;}
-	public float MaxWeight {get;set;}
+	public float SteeringFrictionAdjustmentFactor {get;set;}
+	public float SteeringFrictionAdjustmentFloor {get;set;}
+	public float SteeringFrictionStart {get;set;}
 	
 	public bool IsDraftingEnabled {get;set;}
 	public float DraftingSpeedIncrease {get;set;}
@@ -603,14 +616,11 @@ private class CarClass {
 	public int MinPitTime {get;set;}
 	public int MaxPitTime {get;set;}
 	
-	public CarClass(string classTagName, float baseMaxSpeed, float basePower, bool doFrontSteering, bool doRearSteering, float maxSteeringAngle, float minWheelHeight, int minWheelbase, float maxLateralSpeed, float minWeight, float maxWeight, bool isDraftingEnabled, bool isFuelEnabled, bool isERSEnabled, bool isDownforceEnabled) {
+	public CarClass(string classTagName, float baseMaxSpeed, float basePower, float minWheelHeight, int minWheelbase, float maxLateralSpeed, float minWeight, float maxWeight, bool isDraftingEnabled, bool isFuelEnabled, bool isERSEnabled, bool isDownforceEnabled) {
 		ClassTagName = classTagName;
 
 		BaseMaxSpeed = baseMaxSpeed;
 		BasePower = basePower;
-		DoFrontSteering = doFrontSteering;
-		DoRearSteering = doRearSteering;
-		MaxSteeringAngle = maxSteeringAngle;
 		MinWheelHeight = minWheelHeight;
 		MinWheelbase = minWheelbase;
 		MaxLateralSpeed = maxLateralSpeed;
@@ -621,6 +631,17 @@ private class CarClass {
 		IsFuelEnabled = isFuelEnabled;
 		IsERSEnabled = isERSEnabled;
 		IsDownforceEnabled = isDownforceEnabled;
+	}
+
+	public void SetSteeringValues(bool doFrontSteering, bool doRearSteering, float maxSteeringAngle, float steeringFrictionAdjustmentFactor, float steeringFrictionAdjustmentFloor, float steeringFrictionStart) {
+		if (!doFrontSteering && !doRearSteering) { return; }
+
+		DoFrontSteering = doFrontSteering;
+		DoRearSteering = doRearSteering;
+		MaxSteeringAngle = maxSteeringAngle;
+		SteeringFrictionAdjustmentFactor = steeringFrictionAdjustmentFactor;
+		SteeringFrictionAdjustmentFloor = steeringFrictionAdjustmentFloor;
+		SteeringFrictionStart = steeringFrictionStart;
 	}
 	
 	public void SetDraftingValues(float draftingSpeedIncrease, float draftingPowerIncrease, int residualDraftingTime) {
