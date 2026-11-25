@@ -1,4 +1,4 @@
-string _ScriptVersion = "0.0.2";
+string _ScriptVersion = "0.0.3";
 bool _IsRegistered = false;
 
 float _delta = 0f;
@@ -13,6 +13,8 @@ MyIni _IGCIni = new MyIni();
 ErrorMessage _SetupErrors = new ErrorMessage(0,"");
 
 IMyShipController _MainController;
+List<IMyGyro> _Gyros = new List<IMyGyro>();
+List<IMyThrust> _Thrusters = new List<IMyThrust>();
 Suspensions _Suspensions;
 TrackedRacer _Racer;
 
@@ -22,6 +24,9 @@ Dictionary<string, TireClass> _TireClasses = new Dictionary<string, TireClass>()
 IMyBroadcastListener _broadcastListener;
 IMyUnicastListener _unisource;
 long _controlAddress = -1;
+
+float[] _FrontSteeringPoints;
+float[] _RearSteeringPoints;
 
 public Program() {
 	Me.GetSurface(0).ContentType = ContentType.TEXT_AND_IMAGE;
@@ -38,7 +43,10 @@ public Program() {
 	try {
 		SetupControlSeat();
 		SetupSuspensions();
+		SetupGyros();
+		SetupThrusters();
 		SetupNamingSettings();
+		SetupSteeringSettings();
 		SetupGyroSettings();
 		SetupCommunicationsListeners();
 	} catch (Exception e) {
@@ -58,6 +66,7 @@ public void Main(string argument) {
 
 	HandleArgument(argument);
 	UpdateCommunication();
+	UpdateSteering();
 
 	HandleEchoStates();
 }
@@ -71,7 +80,69 @@ void SetupCommunicationsListeners() {
 	_broadcastListener = IGC.RegisterBroadcastListener("Address");
 }
 
-void SetupSteeringSettings() {}
+void SetupSteeringSettings() {
+	string curSec = "STEERING";
+
+	_FrontSteeringPoints = GetFloatListFromString(_SetupIni.Get(curSec, "FrontSteeringPoints").ToString());
+	_RearSteeringPoints = GetFloatListFromString(_SetupIni.Get(curSec, "RearSteeringPoints").ToString());
+}
+
+void UpdateSteering() {
+	if (_CurrentClass == null) { return; }
+
+	if (!_CurrentClass.DoFrontSteering && (_Suspensions.FL.Steering || _Suspensions.FR.Steering)) {
+		_Suspensions.FL.MaxSteerAngle = 0f;
+		_Suspensions.FR.MaxSteerAngle = 0f;
+		_Suspensions.FL.Steering = false;
+		_Suspensions.FR.Steering = false;
+	}
+	if (!_CurrentClass.DoRearSteering && (_Suspensions.RL.Steering || _Suspensions.RR.Steering)) {
+		_Suspensions.RL.MaxSteerAngle = 0f;
+		_Suspensions.RR.MaxSteerAngle = 0f;
+		_Suspensions.RL.Steering = false;
+		_Suspensions.RR.Steering = false;
+	}
+
+	float carSpeed = (float)_MainController.GetShipSpeed();
+	if (_CurrentClass.DoFrontSteering) {
+		float frontAngle = MathHelper.ToRadians(RangedInterpolation2D(carSpeed, _FrontSteeringPoints));
+		frontAngle = (float)MathHelper.Clamp(frontAngle, 0f, MathHelper.ToRadians(_CurrentClass.MaxSteeringAngle));
+
+		_Suspensions.FL.MaxSteerAngle = frontAngle;
+		_Suspensions.FR.MaxSteerAngle = frontAngle;
+	}
+	if (_CurrentClass.DoRearSteering) {
+		float rearAngle = MathHelper.ToRadians(RangedInterpolation2D(carSpeed, _RearSteeringPoints));
+		rearAngle = (float)MathHelper.Clamp(rearAngle, 0f, MathHelper.ToRadians(_CurrentClass.MaxSteeringAngle));
+
+		_Suspensions.RL.MaxSteerAngle = rearAngle;
+		_Suspensions.RR.MaxSteerAngle = rearAngle;
+	}
+}
+
+private void SetupGyros()
+{
+    var list = new List<IMyTerminalBlock>();
+
+    GridTerminalSystem.GetBlocksOfType<IMyGyro>(list, g => g.CubeGrid == Me.CubeGrid);
+
+    if (list.Count < 1)
+    {
+        _SetupErrors.Increment("Gyro Actions requires at least 1 gyroscope.\n\n");
+        return;
+    }
+
+    _Gyros = list.ConvertAll(g => (IMyGyro)g);
+    for (int i = 0; i < _Gyros.Count; i++)
+    {
+        _Gyros[i].GyroPower = 1f;
+        _Gyros[i].Enabled = true;
+    }
+}
+
+void SetupThrusters() {
+	// todo
+}
 
 void SetupGyroSettings() {}
 
@@ -244,7 +315,6 @@ void HandleRegisterSignal(string message) {
 
 	SetupCarClass();
 	SetupTireClasses();
-	SetupSteeringSettings();
 
 	Me.GetSurface(0).WriteText(message);
 }
@@ -253,6 +323,7 @@ void SetupCarClass() {
 	string curSec = "CAR-CLASS";
 
 	string classNameTag = _IGCIni.Get(curSec, "ClassNameTag").ToString().Replace("\"","");
+
 	float baseMaxSpeed = _IGCIni.Get(curSec, "BaseMaxSpeed").ToSingle();
 	float basePower = _IGCIni.Get(curSec, "BasePower").ToSingle();
 	bool doFrontSteering = _IGCIni.Get(curSec, "DoFrontSteering").ToBoolean();
@@ -261,6 +332,8 @@ void SetupCarClass() {
 	float minWheelHeight = _IGCIni.Get(curSec, "MinWheelHeight").ToSingle();
 	int minWheelbase = _IGCIni.Get(curSec, "MinWheelbase").ToInt32();
 	float maxLateralSpeed = _IGCIni.Get(curSec, "MaxLateralSpeed").ToSingle();
+	float minWeight = _IGCIni.Get(curSec, "MinWeight").ToSingle();
+	float maxWeight = _IGCIni.Get(curSec, "MaxWeight").ToSingle();
 
 	float draftingSpeedIncrease = _IGCIni.Get(curSec, "DraftingSpeedIncrease").ToSingle();
 	float draftingPowerIncrease = _IGCIni.Get(curSec, "DraftingPowerIncrease").ToSingle();
@@ -292,7 +365,7 @@ void SetupCarClass() {
 	int minPitTime = (int)(_IGCIni.Get(curSec, "MinPitTime").ToSingle() * 1000);
 	int maxPitTime = (int)(_IGCIni.Get(curSec, "MaxPitTime").ToSingle() * 1000);
 
-	_CurrentClass = new CarClass(classNameTag, baseMaxSpeed, basePower, doFrontSteering, doRearSteering, maxSteeringAngle, minWheelHeight, minWheelbase, maxLateralSpeed, isDraftingEnabled, isFuelEnabled, isERSEnabled, isDownforceEnabled);
+	_CurrentClass = new CarClass(classNameTag, baseMaxSpeed, basePower, doFrontSteering, doRearSteering, maxSteeringAngle, minWheelHeight, minWheelbase, maxLateralSpeed, minWeight, maxWeight, isDraftingEnabled, isFuelEnabled, isERSEnabled, isDownforceEnabled);
 	_CurrentClass.SetDraftingValues(draftingSpeedIncrease, draftingPowerIncrease, residualDraftingTime);
 	_CurrentClass.SetFuelValues(fuelSpeedIncrease, fuelPowerIncrease, fuelLifetime, refuelTime, maxFuelModifier);
 	_CurrentClass.SetERSValues(ersSpeedIncrease, ersPowerIncrease, ersWheelPropulsionOverride, ersLifetime, ersRechargeTime, ersPitRechargeTime, maxERSModifier);
@@ -305,6 +378,9 @@ void SetupTireClasses() {
 
 	foreach (string curSec in tireClassSectionNames) {
 		string tireName = _IGCIni.Get(curSec, "TireName").ToString().Replace("\"","").ToUpper();
+		int[] tireColors = GetIntListFromString(_IGCIni.Get(curSec, "TireColor").ToString());
+		Color tireColor = new Color(tireColors[0], tireColors[1], tireColors[2]);
+
 		float startFriction = _IGCIni.Get(curSec, "StartFriction").ToSingle();
 		float endFriction = _IGCIni.Get(curSec, "EndFriction").ToSingle();
 		int lifetime = (int)(_IGCIni.Get(curSec, "Lifetime").ToSingle() * 1000);
@@ -312,7 +388,7 @@ void SetupTireClasses() {
 		float wetnessEffect = _IGCIni.Get(curSec, "WetnessEffect").ToSingle();
 		int wetnessTime = (int)(_IGCIni.Get(curSec, "WetnessTime").ToSingle() * 1000);
 
-		_TireClasses.Add(tireName, new TireClass(tireName, startFriction, endFriction, lifetime, maxWetness, wetnessEffect, wetnessTime));
+		_TireClasses.Add(tireName, new TireClass(tireName, tireColor, startFriction, endFriction, lifetime, maxWetness, wetnessEffect, wetnessTime));
 	}
 }
 
@@ -364,6 +440,69 @@ List<string> GetSectionNamesByPattern(string pattern, MyIni ini) {
 		}
 	}
 	return returnList;
+}
+
+int[] GetIntListFromString (string inputList) {
+	string baseList = inputList.Trim().Replace(" ", "").Replace("{", "").Replace("}", "");
+	string[] splitList = baseList.Split(',');
+	int[] outputList = new int[splitList.Length];
+	
+	for (int i = 0; i < splitList.Length; i++) {
+		Int32.TryParse(splitList[i], out outputList[i]);
+	}
+	
+	return outputList;
+}
+
+float[] GetFloatListFromString (string inputList) {
+	string baseList = inputList.Trim().Replace(" ", "").Replace("{", "").Replace("}", "");
+	string[] splitList = baseList.Split(',');
+	float[] outputList = new float[splitList.Length];
+	
+	for (int i = 0; i < splitList.Length; i++) {
+		Single.TryParse(splitList[i], out outputList[i]);
+	}
+	
+	return outputList;
+}
+
+float RangedInterpolation2D(float dependentValue, float[] coordinates) {
+	float[] dependentBounds = new float[coordinates.Length/2];
+	float[] independentValues = new float[coordinates.Length/2];
+
+	int index = 0;
+	for (int i = 0; i < coordinates.Length; i += 2) {
+		dependentBounds[index] = coordinates[i];
+		independentValues[index] = coordinates[i + 1];
+		index++;
+	}
+
+    int[] axisIndexes = DetermineAxisIndices(dependentValue, dependentBounds);
+
+    int lowerIndex = axisIndexes[0];
+    int upperIndex = axisIndexes[1];
+
+    if (lowerIndex == upperIndex) { return independentValues[lowerIndex]; }
+
+    float slope = (independentValues[upperIndex] - independentValues[lowerIndex]) / (dependentBounds[upperIndex] - dependentBounds[lowerIndex]);
+    slope = (float.IsNaN(slope) || float.IsInfinity(slope)) ? 0f : slope;
+    float intercept = independentValues[lowerIndex] - slope * dependentBounds[lowerIndex];
+    return slope * dependentValue + intercept; // y = m*x + b
+}
+
+int[] DetermineAxisIndices(float axisCoordinate, float[] axisCoordinates) {
+    int maxAxisBound = axisCoordinates.Length - 1;
+
+    if (axisCoordinate < axisCoordinates[0]) { return new int[] {0, 0}; }
+    if (axisCoordinate > axisCoordinates[maxAxisBound]) { return new int[] {maxAxisBound, maxAxisBound}; }
+
+    for (int i = 0; i < maxAxisBound; i++) {
+        if (axisCoordinate > axisCoordinates[i + 1]) { continue; }
+
+        return new int[] {i, i + 1};
+    }
+
+    return new int[] {0, 0};
 }
 
 private struct ErrorMessage {
@@ -423,6 +562,7 @@ private struct TrackedRacer {
 
 private class CarClass {
 	public string ClassTagName {get;set;}
+
 	public float BaseMaxSpeed {get;set;}
 	public float BasePower {get;set;}
 	public bool DoFrontSteering {get;set;}
@@ -431,6 +571,8 @@ private class CarClass {
 	public float MinWheelHeight {get;set;}
 	public int MinWheelbase {get;set;}
 	public float MaxLateralSpeed {get;set;}
+	public float MinWeight {get;set;}
+	public float MaxWeight {get;set;}
 	
 	public bool IsDraftingEnabled {get;set;}
 	public float DraftingSpeedIncrease {get;set;}
@@ -461,8 +603,9 @@ private class CarClass {
 	public int MinPitTime {get;set;}
 	public int MaxPitTime {get;set;}
 	
-	public CarClass(string classTagName, float baseMaxSpeed, float basePower, bool doFrontSteering, bool doRearSteering, float maxSteeringAngle, float minWheelHeight, int minWheelbase, float maxLateralSpeed, bool isDraftingEnabled, bool isFuelEnabled, bool isERSEnabled, bool isDownforceEnabled) {
+	public CarClass(string classTagName, float baseMaxSpeed, float basePower, bool doFrontSteering, bool doRearSteering, float maxSteeringAngle, float minWheelHeight, int minWheelbase, float maxLateralSpeed, float minWeight, float maxWeight, bool isDraftingEnabled, bool isFuelEnabled, bool isERSEnabled, bool isDownforceEnabled) {
 		ClassTagName = classTagName;
+
 		BaseMaxSpeed = baseMaxSpeed;
 		BasePower = basePower;
 		DoFrontSteering = doFrontSteering;
@@ -471,6 +614,8 @@ private class CarClass {
 		MinWheelHeight = minWheelHeight;
 		MinWheelbase = minWheelbase;
 		MaxLateralSpeed = maxLateralSpeed;
+		MinWeight = minWeight;
+		MaxWeight = maxWeight;
 		
 		IsDraftingEnabled = isDraftingEnabled;
 		IsFuelEnabled = isFuelEnabled;
@@ -520,6 +665,7 @@ private class CarClass {
 
 private struct TireClass {
 	public string TireName {get;set;}
+	public Color TireColor {get;set;}
 	public float StartFriction {get;set;}
 	public float EndFriction {get;set;}
 	public int Lifetime {get;set;} // int b/c ms
@@ -527,8 +673,9 @@ private struct TireClass {
 	public float WetnessEffect {get;set;}
 	public int WetnessTime {get;set;} // int b/c ms
 	
-	public TireClass(string tireName, float startFriction, float endFriction, int lifetime, float maxWetness, float wetnessEffect, int wetnessTime) {
+	public TireClass(string tireName, Color tireColor, float startFriction, float endFriction, int lifetime, float maxWetness, float wetnessEffect, int wetnessTime) {
 		TireName = tireName;
+		TireColor = tireColor;
 		StartFriction = startFriction;
 		EndFriction = endFriction;
 		Lifetime = lifetime;
