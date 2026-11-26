@@ -1,4 +1,4 @@
-string _ScriptVersion = "0.0.4";
+string _ScriptVersion = "0.0.6";
 bool _IsRegistered = false;
 
 float _delta = 0f;
@@ -11,9 +11,14 @@ MyIni _SetupIni = new MyIni();
 MyIni _IGCIni = new MyIni();
 
 ErrorMessage _SetupErrors = new ErrorMessage(0,"");
-
 IMyShipController _MainController;
+
 List<IMyGyro> _Gyros = new List<IMyGyro>();
+bool _DoGyroActions = false;
+float _GyroRPM = 0f;
+float _StabGyroPower = 0f;
+int _StabGyroReenableDelay = 0;
+
 List<IMyThrust> _Thrusters = new List<IMyThrust>();
 Suspensions _Suspensions;
 TrackedRacer _Racer;
@@ -43,11 +48,13 @@ public Program() {
 	try {
 		SetupControlSeat();
 		SetupSuspensions();
-		SetupGyros();
 		SetupThrusters();
 		SetupNamingSettings();
 		SetupSteeringSettings();
+
 		SetupGyroSettings();
+		SetupGyros();
+
 		SetupCommunicationsListeners();
 	} catch (Exception e) {
 		_SetupErrors.Increment($"{e.Message}");
@@ -67,8 +74,13 @@ public void Main(string argument) {
 	HandleArgument(argument);
 	UpdateCommunication();
 	UpdateSteering();
+	UpdateGyros();
 
 	HandleEchoStates();
+}
+
+void UpdateGyros() {
+	if (!_DoGyroActions) { return; }
 }
 
 void HandleArgument(string argument) {
@@ -105,27 +117,61 @@ void UpdateSteering() {
 	
 	float carSpeed = (float)_MainController.GetShipSpeed();
 
-	float a = -( (1 - _CurrentClass.SteeringFrictionAdjustmentFactor) / Math.Pow(_CurrentClass.SteeringFrictionStart - 40f, 4) );
+	float a = -( (1 - _CurrentClass.SteeringFrictionAdjustmentFactor) / (float)Math.Pow((double)(_CurrentClass.SteeringFrictionStart - 40f), 4f) );
 	float x = _Suspensions.FL.Friction - _CurrentClass.SteeringFrictionStart;
-	float frictionFactor = (_Suspensions.FL.Friction < _CurrentClass.SteeringFrictionStart) ? (float)MathHelper.Clamp(a*Math.Pow(x, 4) + 1, _CurrentClass.SteeringFrictionAdjustmentFloor, 1f) : 1f;
+
+	float frictionFactor = a*(float)Math.Pow((double)x, 4) + 1;
+	frictionFactor = (float)MathHelper.Clamp(frictionFactor, _CurrentClass.SteeringFrictionAdjustmentFloor, 1f);
+	frictionFactor = (_Suspensions.FL.Friction < _CurrentClass.SteeringFrictionStart) ? frictionFactor : 1f;
+
 	if (_CurrentClass.DoFrontSteering) {
+		if (!_Suspensions.FL.Steering || !_Suspensions.FR.Steering) {
+			_Suspensions.FL.Steering = true;
+			_Suspensions.FR.Steering = true;
+		}
+
 		float frontAngle = MathHelper.ToRadians(RangedInterpolation2D(carSpeed, _FrontSteeringPoints));
-		frontAngle = (float)MathHelper.Clamp(frontAngle * frictionFactor, 0f, (float)MathHelper.ToRadians(_CurrentClass.MaxSteeringAngle));
+		frontAngle = (float)MathHelper.Clamp(frontAngle * frictionFactor, 0f, MathHelper.ToRadians(_CurrentClass.MaxSteeringAngle));
 
 		_Suspensions.FL.MaxSteerAngle = frontAngle;
 		_Suspensions.FR.MaxSteerAngle = frontAngle;
 	}
 	if (_CurrentClass.DoRearSteering) {
+		if (!_Suspensions.RL.Steering || !_Suspensions.RR.Steering) {
+			_Suspensions.RL.Steering = true;
+			_Suspensions.RR.Steering = true;
+		}
+
 		float rearAngle = MathHelper.ToRadians(RangedInterpolation2D(carSpeed, _RearSteeringPoints));
-		rearAngle = (float)MathHelper.Clamp(rearAngle * frictionFactor, 0f, (float)MathHelper.ToRadians(_CurrentClass.MaxSteeringAngle));
+		rearAngle = (float)MathHelper.Clamp(rearAngle * frictionFactor, 0f, MathHelper.ToRadians(_CurrentClass.MaxSteeringAngle));
 
 		_Suspensions.RL.MaxSteerAngle = rearAngle;
 		_Suspensions.RR.MaxSteerAngle = rearAngle;
 	}
 }
 
+void SetupThrusters() {
+	// todo
+}
+
+void SetupGyroSettings() {
+	string curSec = "GYRO";
+
+	bool doGyroActions = _SetupIni.Get(curSec, "DoGyroActions").ToBoolean();
+	float gyroRPM = _SetupIni.Get(curSec, "MaxGyroRPM").ToSingle();
+	float stabGyroPower = _SetupIni.Get(curSec, "StabGyroPower").ToSingle();
+	int stabGyroReenableDelay = (int)(_SetupIni.Get(curSec, "StabGyroReenableDelay").ToSingle() * 1000);
+
+	_DoGyroActions = doGyroActions;
+	_GyroRPM = gyroRPM;
+	_StabGyroPower = stabGyroPower;
+	_StabGyroReenableDelay = stabGyroReenableDelay;
+}
+
 private void SetupGyros()
 {
+	if (!_DoGyroActions) { return; }
+
     var list = new List<IMyTerminalBlock>();
 
     GridTerminalSystem.GetBlocksOfType<IMyGyro>(list, g => g.CubeGrid == Me.CubeGrid);
@@ -143,12 +189,6 @@ private void SetupGyros()
         _Gyros[i].Enabled = true;
     }
 }
-
-void SetupThrusters() {
-	// todo
-}
-
-void SetupGyroSettings() {}
 
 void SetupNamingSettings() {
 	string curSec = "NAMING";
@@ -340,7 +380,7 @@ void SetupCarClass() {
 	bool doRearSteering = _IGCIni.Get(curSec, "DoRearSteering").ToBoolean();
 	float maxSteeringAngle = _IGCIni.Get(curSec, "MaxSteeringAngle").ToSingle();
 	float steeringFrictionAdjustmentFactor = _IGCIni.Get(curSec, "SteeringFrictionAdjustmentFactor").ToSingle();
-	float steeringFrictionAdjustmentFloor = _IGCIni.Get(curSec, "SteeringFrictionAdjustmentFactor").ToSingle();
+	float steeringFrictionAdjustmentFloor = _IGCIni.Get(curSec, "SteeringFrictionAdjustmentFloor").ToSingle();
 	float steeringFrictionStart = _IGCIni.Get(curSec, "SteeringFrictionStart").ToSingle();
 
 	float draftingSpeedIncrease = _IGCIni.Get(curSec, "DraftingSpeedIncrease").ToSingle();
